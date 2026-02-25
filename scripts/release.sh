@@ -119,27 +119,52 @@ mv bundle-linux-x64    skills-linux-x64    2>/dev/null || true
 mv bundle-win-x64.exe  skills-win-x64.exe  2>/dev/null || true
 cd ..
 
-# ── Ad-hoc code sign macOS binaries ──────────────────────────────────────────
-# macOS will refuse to run unsigned binaries. On macOS, codesign is used.
-# On Linux, ldid can apply an ad-hoc signature (install with: apt install ldid).
+# ── Code sign macOS binaries ──────────────────────────────────────────────────
+#
+# Set CODESIGN_IDENTITY to use a Developer ID certificate for public releases:
+#
+#   export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+#   ./scripts/release.sh
+#
+# To obtain an identity:
+#   1. Enroll at developer.apple.com/programs ($99/year)
+#   2. In Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application
+#      OR generate a CSR with openssl, upload at developer.apple.com, install the .cer
+#   3. Run: security find-identity -v -p codesigning
+#      Copy the string in quotes — that is your CODESIGN_IDENTITY value.
+#
+# Without CODESIGN_IDENTITY the script falls back to ad-hoc signing (-).
+# Ad-hoc binaries require users to run:
+#   xattr -d com.apple.quarantine ./skills-macos-arm64
+#
+# See README.md for full notarization instructions.
 
 step "Code signing macOS binaries"
 OS="$(uname -s)"
+IDENTITY="${CODESIGN_IDENTITY:--}"   # default: ad-hoc (-)
+
 if [ "$OS" = "Darwin" ]; then
-  codesign --sign - dist-bin/skills-macos-arm64
-  codesign --sign - dist-bin/skills-macos-x64
-  info "Signed with codesign (ad-hoc)"
+  codesign --sign "$IDENTITY" --options runtime --timestamp \
+    dist-bin/skills-macos-arm64
+  codesign --sign "$IDENTITY" --options runtime --timestamp \
+    dist-bin/skills-macos-x64
+  if [ "$IDENTITY" = "-" ]; then
+    info "Signed (ad-hoc). For public releases set CODESIGN_IDENTITY. See README.md."
+  else
+    info "Signed with: $IDENTITY"
+  fi
 elif command -v ldid &>/dev/null; then
   ldid -S dist-bin/skills-macos-arm64
   ldid -S dist-bin/skills-macos-x64
-  info "Signed with ldid (ad-hoc)"
+  info "Signed with ldid (ad-hoc, Linux fallback)"
 else
   echo ""
   echo "  ⚠ WARNING: macOS binaries are unsigned."
   echo "  They will be killed immediately on macOS unless signed."
-  echo "  To fix, either:"
-  echo "    - Run this script on macOS (uses codesign automatically)"
-  echo "    - Install ldid on this Linux machine: apt install ldid"
+  echo "  Options:"
+  echo "    - Run this script on macOS (codesign is used automatically)"
+  echo "    - Install ldid: apt install ldid"
+  echo "    - See README.md for Developer ID signing instructions"
   echo ""
 fi
 
