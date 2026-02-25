@@ -1,0 +1,99 @@
+name: Release Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to release (e.g. v1.4.1). Defaults to upstream version.'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Clone vercel-labs/skills
+        run: git clone https://github.com/vercel-labs/skills skills-src
+
+      - name: Install dependencies
+        working-directory: skills-src
+        run: pnpm install
+
+      - name: Build (TypeScript → JS)
+        working-directory: skills-src
+        run: pnpm build
+
+      - name: Read upstream version
+        id: upstream_version
+        working-directory: skills-src
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Bundle into single CJS file (for pkg compatibility)
+        working-directory: skills-src
+        run: |
+          npx esbuild dist/cli.mjs \
+            --bundle \
+            --platform=node \
+            --format=cjs \
+            --outfile=bundle.cjs \
+            --external:fsevents
+
+      - name: Compile binaries
+        working-directory: skills-src
+        run: |
+          npx @yao-pkg/pkg bundle.cjs \
+            --targets node20-macos-arm64,node20-macos-x64,node20-linux-x64,node20-win-x64 \
+            --out-path ./dist-bin
+
+      - name: Rename binaries with friendly names
+        working-directory: skills-src
+        run: |
+          cd dist-bin
+          mv bundle-macos-arm64  skills-macos-arm64   2>/dev/null || true
+          mv bundle-macos-x64    skills-macos-x64     2>/dev/null || true
+          mv bundle-linux-x64    skills-linux-x64     2>/dev/null || true
+          mv bundle-win-x64.exe  skills-win-x64.exe   2>/dev/null || true
+          ls -lh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || steps.upstream_version.outputs.version }}
+          name: skills ${{ github.event.inputs.version || steps.upstream_version.outputs.version }}
+          body: |
+            Standalone binaries for [vercel-labs/skills](https://github.com/vercel-labs/skills).
+
+            ## Installation
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            ```
+
+            ## Manual download
+
+            | Platform       | Binary                  |
+            | -------------- | ----------------------- |
+            | macOS (Apple)  | `skills-macos-arm64`    |
+            | macOS (Intel)  | `skills-macos-x64`      |
+            | Linux x64      | `skills-linux-x64`      |
+            | Windows x64    | `skills-win-x64.exe`    |
+          files: skills-src/dist-bin/*
+          fail_on_unmatched_files: true
