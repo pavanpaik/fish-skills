@@ -10,6 +10,7 @@ set -euo pipefail
 
 REPO="pavanpaik/fish-skills"
 WORK_DIR="$(mktemp -d)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # root of the fish-skills checkout
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -21,11 +22,19 @@ die()   { echo "ERROR: $*" >&2; exit 1; }
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
 step "Checking prerequisites"
-for cmd in git node pnpm gh npx; do
+for cmd in git node pnpm npx; do
   command -v "$cmd" &>/dev/null && info "$cmd ✓" || die "'$cmd' not found. Please install it first."
 done
 
-gh auth status &>/dev/null || die "Not logged in to GitHub CLI. Run: gh auth login"
+# gh is only needed for GitHub Releases — warn but don't fail if absent
+HAS_GH=false
+if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+  HAS_GH=true
+  info "gh ✓ (GitHub Releases will be created)"
+else
+  echo "  gh not found or not authenticated — skipping GitHub Release."
+  echo "  macOS binaries will still be committed to the repo."
+fi
 
 # ── Clone and build ───────────────────────────────────────────────────────────
 
@@ -171,13 +180,27 @@ fi
 step "Built binaries:"
 ls -lh dist-bin/
 
-# ── Create GitHub release ─────────────────────────────────────────────────────
+# ── Commit macOS binaries to repo (deprecated direct-serve pattern) ───────────
+# Allows `curl | bash` to work on macOS without GitHub Releases access.
+# install.sh reads from dist/mac/ via raw.githubusercontent.com.
 
-step "Creating GitHub release $TAG"
-gh release create "$TAG" \
-  --repo "$REPO" \
-  --title "skills $TAG" \
-  --notes "$(cat <<EOF
+step "Committing macOS binaries to repo"
+cp dist-bin/skills-macos-arm64 "$REPO_ROOT/dist/mac/skills-macos-arm64"
+cp dist-bin/skills-macos-x64   "$REPO_ROOT/dist/mac/skills-macos-x64"
+
+git -C "$REPO_ROOT" add dist/mac/skills-macos-arm64 dist/mac/skills-macos-x64
+git -C "$REPO_ROOT" commit -m "chore: update macOS binaries to $TAG"
+git -C "$REPO_ROOT" push
+info "macOS binaries pushed to repo — curl install now works on macOS."
+
+# ── Create GitHub release (optional — requires gh + release permissions) ───────
+
+if [ "$HAS_GH" = "true" ]; then
+  step "Creating GitHub release $TAG"
+  gh release create "$TAG" \
+    --repo "$REPO" \
+    --title "skills $TAG" \
+    --notes "$(cat <<EOF
 Standalone binaries for [vercel-labs/skills](https://github.com/vercel-labs/skills).
 
 ## Installation
@@ -196,7 +219,11 @@ curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
 | Windows x64   | \`skills-win-x64.exe\` |
 EOF
 )" \
-  dist-bin/*
-
-echo ""
-echo "Released: https://github.com/${REPO}/releases/tag/${TAG}"
+    dist-bin/*
+  echo ""
+  echo "Released: https://github.com/${REPO}/releases/tag/${TAG}"
+else
+  echo ""
+  echo "Skipped GitHub Release (gh not available)."
+  echo "To create a release later: gh release create $TAG dist-bin/*"
+fi

@@ -1,0 +1,3 @@
+# Treat macOS binaries as opaque binary files — no diffs, no merges, no line-ending conversion
+dist/mac/skills-macos-arm64  binary
+dist/mac/skills-macos-x64    binary
